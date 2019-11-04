@@ -1,0 +1,272 @@
+---
+title: "Exploratory Data Analysis - N-gram Model"
+author: "Jaime Hernandez"
+date: "October 29, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+
+First load the data:
+```{r}
+setwd("~/Work/Training/Data Science Coursera/10-Capstone/Final_Project")
+
+library(stringi)
+library(stringr)
+library(ggplot2)
+library(RColorBrewer)
+library(dplyr)
+library(tm)
+library(wordcloud)
+library(rJava)
+library(RWeka)
+library(textclean)
+
+con <- file("./final/en_US/en_US.twitter.txt", open = "rb")
+twitter <- readLines(con, encoding = "UTF-8", skipNul = TRUE)
+close(con)
+
+con <- file("./final/en_US/en_US.news.txt", open = "rb")
+news <- readLines(con, encoding = "UTF-8", skipNul = TRUE)
+close(con)
+
+con <- file("./final/en_US/en_US.blogs.txt", open = "rb")
+blog <- readLines(con, encoding = "UTF-8", skipNul = TRUE)
+close(con)
+
+
+```
+Display general statistics about the three corpora. 
+
+The graph below illustrates the relationship between number of lines and empty lines for all three corpora. This is probably a good estimation for the density of the different corporas.
+
+```{r}
+
+stats_df <- data.frame(rbind(stri_stats_general(twitter),
+                  stri_stats_general(news),
+                  stri_stats_general(blog)),
+                  source = c("twitter", "news", "blog")
+                )
+
+g.word.count <- ggplot(stats_df, aes(x = stats_df$Lines, y = stats_df$Chars, fill = source)) +
+    geom_bar(stat = "identity") + 
+    ggtitle("Word Count") +
+xlab("Number of Lines") +
+ylab("Empy Lines") 
+
+g.word.count
+
+colnames(stats_df) <- c("Total Number of Lines", "Empty Lines", "Total Number of Characters", "Number of Empty Characters" , "Source")
+
+stats_df
+
+```
+
+Show frequencies of words found for each data source:
+
+
+```{r}
+#Twitter
+twitter_chars <- strsplit(twitter," ") %>%
+    unlist()
+
+#Getting frequencies but only keeping the botton 95% of unique "words" to mitigate skewed data
+twitter_freq <- table(twitter_chars) %>%
+    as.data.frame() 
+
+twitter_count <- nrow(twitter_freq)
+
+twitter_freq <- twitter_freq %>%
+    top_n(round(twitter_count*.95), -Freq)
+
+
+hist(twitter_freq$Freq, col = "blue", main = "Histogram of Number of Words in twitter", xlab = "Number of Words")
+
+#####
+#Blogs
+
+blog_chars <- strsplit(blog," ") %>%
+    unlist()
+
+#Getting frequencies but only keeping the botton 95% of unique "words" to mitigate skewed data
+blog_freq <- table(blog_chars) %>%
+    as.data.frame()
+
+blog_count <- nrow(blog_freq)
+
+
+blog_freq <- blog_freq %>%
+    top_n(round(blog_count*.95), -Freq)
+
+
+hist(blog_freq$Freq, col = "blue", main = "Histogram of Number of Words in blogs", xlab = "Number of Words")
+
+#####
+#News
+
+news_chars <- strsplit(news," ") %>%
+    unlist()
+
+#Getting frequencies but only keeping the botton 95% of unique "words" to mitigate skewed data
+news_freq <- table(news_chars) %>%
+    as.data.frame()
+
+news_count <- nrow(news_freq)
+
+news_freq <- news_freq %>%
+    top_n(round(news_count*.95), -Freq)
+
+
+
+hist(news_freq$Freq, col = "blue", main = "Histogram of Number of Words in blogs", xlab = "Number of Words")
+```
+
+
+
+Sampling data for modeling:
+
+```{r}
+
+blogsSample <- sample(blog, 6000)
+newsSample <- sample(news, 6000)
+twitterSample <- sample(twitter, 6000)
+
+# save samples
+
+sample <-c(blogsSample, newsSample, twitterSample)
+
+```
+
+Cleaning the data:
+
+Looking into literature, a common approach was created to clean the data and edit the data files. Common punctiation (commas, periods, etc.) and other key character combinations such as smileys were marked to signify beginning/end of sentences. Common english stopwords such as "a, is, etc" were removed in order to get a more robust analysis of the corpora.
+
+To remove profanity, a profanity text file was downloaded from google. All words in the sample corpora that include these profanity words were removed.
+
+This function was written to signify the end of a sentence though it is not needed for this specific assignment.
+
+
+```{r}
+data_dir <- c("~/Work/Training/Data Science Coursera/10-Capstone/Final_Project")
+
+cleanData <- function(data) {
+    
+        library(tm)
+    
+                    # Profanity filtering
+            
+                    f <- file(paste0(data_dir,"/profanity.txt"))
+                    profanities<-readLines(f,encoding="UTF-8")
+                    close(f)
+                    
+                    data <- tolower(data) # convert to lowercase
+                    data <- removeWords(data, profanities)
+                    data <- removeWords(data, stopwords("english"))
+            
+                    data <- removeNumbers(data) # remove numbers
+                    data <- replace_contraction(data)
+                    pontuacao <-  '[.,!:;?]|:-\\)|:-\\(|:\\)|:\\(|:D|=D|8\\)|:\\*|=\\*|:x|:X|:o|:O|:~\\(|T\\.T|Y\\.Y|S2|<3|:B|=B|=3|:3'
+                    data <- gsub(pontuacao," END ",data) # substitute selected ponctuation (including smileys) with the word END
+                    data <- gsub("$"," END",data) # make sure every line ends with an END
+                    data <- gsub("\\b(\\w+)\\s+\\1\\b","\\1",data) # remove duplicate words in sequence (eg.                
+                    data <- removePunctuation(data) # remove all other punctuation
+                    data <- str_replace_all(data, "[[:punct:]]", "")
+                    data <- stripWhitespace(data) # remove excess white space
+                    data <- gsub("^[[:space:]]","",data) # make sure lines doesn't begin with space
+                    data <- gsub("[[:space:]]$","",data) # make sure lines doesn't end with space
+        
+
+}
+sample_clean <- cleanData(sample)
+sample_clean <- removeWords(sample_clean, "END" )
+
+c_sample_clean <- VCorpus(VectorSource(sample_clean))
+
+```
+
+N-gram Modeling
+
+```{r}
+
+gc()
+#STarting with one worker 
+options(mc.cores = 1)
+OnegramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 1, max = 1))
+memory.limit(size = 75000)
+gc()
+oneGramMatrix<-as.matrix(TermDocumentMatrix(c_sample_clean, control=list(tokenize=OnegramTokenizer)))
+onegramRowSum<-rowSums(oneGramMatrix)
+onegram<-data.frame(onegram=names(onegramRowSum),freq=onegramRowSum)
+onegramSorted<-onegram[order(-onegram$freq),]
+par(mar = c(5, 5, 2, 2) + 0.2)
+barplot(onegramSorted[1:20,]$freq/1000, horiz=F, cex.names=0.8, xlab="Unigrams",
+    ylab="Frequency (thousand)",las=2,names.arg=onegramSorted[1:20,]$onegram, 
+    main="Top 20 Unigrams with the highest frequency")
+
+
+```
+
+No let's analyze twograms
+
+```{r}
+TwogramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2))
+                                
+twogramMatrix <- TermDocumentMatrix(c_sample_clean, control=list(tokenize = TwogramTokenizer))
+
+twoFreq <- findFreqTerms(twogramMatrix,lowfreq=10)
+twogramRowSum <- rowSums(as.matrix(twogramMatrix[twoFreq,]))
+ 
+
+barplot(twogramRowSum[1:20], horiz=F, cex.names=0.8, xlab="twograms",
+         ylab="Frequency",las=2,names.arg=names(twogramRowSum[1:20]), 
+         main="Top 20 twogram with the highest frequency")
+
+
+```
+
+
+
+
+Now let's analyze three-grams:
+
+```{r}
+TrigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+                                
+trigramMatrix <- TermDocumentMatrix(c_sample_clean, control=list(tokenize = TrigramTokenizer))
+
+triFreq<-findFreqTerms(trigramMatrix,lowfreq=10)
+trigramRowSum<-rowSums(as.matrix(trigramMatrix[triFreq,]))
+ 
+barplot(trigramRowSum[1:20], horiz=F, cex.names=0.8, 
+         ylab="Frequency",las=2,names.arg=names(trigramRowSum[1:20]), 
+         main="Top 20 trigram with the highest frequency")
+
+
+```
+
+
+
+Now that the data is in a clean state and that intial analysis of the data has been completed, the next milestone will be to focuse on the predictive model.
+
+Training data will be used to create initial models that will be tested using a test data extract as well.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
